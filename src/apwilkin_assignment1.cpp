@@ -41,7 +41,9 @@
 using namespace std;
 
 void server(const char* ip_address, const char* port_string, int port_num);
+void serverCommandProcessor(const char* ip_address, int port_num, int listener);
 void client(const char* ip_address, const char* port_string, int port_num);
+void clientCommandProcessor(const char* ip_address, int port_num, int listener);
 void author(string command);
 void ip(string command, string ip_ad);
 void port(string command, int port);
@@ -112,6 +114,14 @@ int main(int argc, char **argv)
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+void *get_in_addr(struct sockaddr *sa) {
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
 void server(const char* ip_address, const char* port_string, int port_num) {
 	/*
 	socket:
@@ -123,7 +133,7 @@ void server(const char* ip_address, const char* port_string, int port_num) {
 	*/
 	//BEEJ
 	
-	struct sockaddr_storage their_addr;
+	/*struct sockaddr_storage their_addr;
 	socklen_t addr_size;
 	struct addrinfo hints, *res;
 	int sockfd, new_fd;
@@ -155,46 +165,180 @@ void server(const char* ip_address, const char* port_string, int port_num) {
 	bytes_sent = send(new_fd, msg, strlen(msg), 0);
 	
 	close(new_fd);
-	close(sockfd);
+	close(sockfd);*/
 	
-	
+	fd_set master;    // master file descriptor list
+    fd_set read_fds;  // temp file descriptor list for select()
+    int fdmax;        // maximum file descriptor number
+
+    int listener;     // listening socket descriptor
+    int newfd;        // newly accept()ed socket descriptor
+    struct sockaddr_storage remoteaddr; // client address
+    socklen_t addrlen;
+
+    char buf[256];    // buffer for client data
+    int nbytes;
+
+    char remoteIP[INET_ADDRSTRLEN];
+
+    int yes=1;        // for setsockopt() SO_REUSEADDR, below
+    int i, j, rv;
+
+    struct addrinfo hints, *ai, *p;
+
+    FD_ZERO(&master);    // clear the master and temp sets
+    FD_ZERO(&read_fds);
+
+    // get us a socket and bind it
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if ((rv = getaddrinfo(ip_address, port_string, &hints, &ai)) != 0) {
+        fprintf(stderr, "selectserver: %s\n", gai_strerror(rv));
+        exit(1);
+    }
+    
+    for(p = ai; p != NULL; p = p->ai_next) {
+        listener = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (listener < 0) { 
+            continue;
+        }
+        
+        // lose the pesky "address already in use" error message
+        setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+
+        if (bind(listener, p->ai_addr, p->ai_addrlen) < 0) {
+            close(listener);
+            continue;
+        }
+
+        break;
+    }
+
+    // if we got here, it means we didn't get bound
+    if (p == NULL) {
+        fprintf(stderr, "selectserver: failed to bind\n");
+        exit(2);
+    }
+
+    freeaddrinfo(ai); // all done with this
+
+    // listen
+    if (listen(listener, 10) == -1) {
+        perror("listen");
+        exit(3);
+    }
+
+    // add the listener to the master set
+    FD_SET(listener, &master);
+
+    // keep track of the biggest file descriptor
+    fdmax = listener; // so far, it's this one
+
+    // main loop
+    for(;;) {
+        read_fds = master; // copy it
+        if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
+            perror("select");
+            exit(4);
+        }
+
+        // run through the existing connections looking for data to read
+        for(i = 0; i <= fdmax; i++) {
+            if (FD_ISSET(i, &read_fds)) { // we got one!!
+                if (i == listener) {
+                    // handle new connections
+                    addrlen = sizeof remoteaddr;
+                    newfd = accept(listener,
+                        (struct sockaddr *)&remoteaddr,
+                        &addrlen);
+                    //my code
+					const char *msg = "Hello Client!";
+					int len, bytes_sent;
+					bytes_sent = send(newfd, msg, strlen(msg), 0);
+					//my code;
+                    if (newfd == -1) {
+                        perror("accept");
+                    } else {
+                        FD_SET(newfd, &master); // add to master set
+                        if (newfd > fdmax) {    // keep track of the max
+                            fdmax = newfd;
+                        }
+                        printf("selectserver: new connection from %s on "
+                            "socket %d\n",
+                            inet_ntop(remoteaddr.ss_family,
+                                get_in_addr((struct sockaddr*)&remoteaddr),
+                                remoteIP, INET_ADDRSTRLEN),
+                            newfd);
+                    }
+                } else {
+                    // handle data from a client
+                    if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0) {
+                        // got error or connection closed by client
+                        if (nbytes == 0) {
+                            // connection closed
+                            printf("selectserver: socket %d hung up\n", i);
+                        } else {
+                            perror("recv");
+                        }
+                        close(i); // bye!
+                        FD_CLR(i, &master); // remove from master set
+                    } else {
+                        // we got some data from a client
+                        for(j = 0; j <= fdmax; j++) {
+                            // send to everyone!
+                            if (FD_ISSET(j, &master)) {
+                                // except the listener and ourselves
+                                if (j != listener && j != i) {
+                                    if (send(j, buf, nbytes, 0) == -1) {
+                                        perror("send");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } // END handle data from client
+            } // END got new incoming connection
+        } // END looping through file descriptors
+    } // END for(;;)--and you thought it would never end!
+}
+
 	//command processing
+void serverCommandProcessor(const char* ip_address, int port_num, int listener) {
 	string command_str;
-	while (command_str != "EXIT") {
+	if (command_str != "") {
 		getline(cin, command_str);
-		/*split string into vector
-		http://stackoverflow.com/questions/236129/split-a-string-in-c */
 		istringstream iss(command_str);
 		vector<string> command_vector;
 		copy(istream_iterator<string>(iss), istream_iterator<string>(),	back_inserter(command_vector));
-		
+
 		// server or client
 		if (command_str == "AUTHOR") {
 			author(command_str);
 		}
-		
+
 		//server or client
 		else if (command_str == "IP") {
 			ip(command_str, ip_address);
 		}
-		
+
 		// server or client
 		else if (command_str == "PORT") {
 			port(command_str, port_num);
 		}
-		
+
 		// server or client
 		else if (command_str == "LIST") {
 			list(command_str);
 		}
-		
+
 		// server
 		else if (command_str == "STATISTICS") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
-	
+
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
-		
+
 		// server
 		else if (command_vector[0] == "BLOCKED") {
 			if (command_vector.size() != 3) {
@@ -212,10 +356,11 @@ void server(const char* ip_address, const char* port_string, int port_num) {
 		//client (and server?)
 		else if (command_str == "EXIT") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
+			//close(listener);
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
-			break; //may need to do something different here
+			return; //may need to do something different here
 		}
-		
+
 		else {
 			cse4589_print_and_log("[%s:ERROR]\n", command_str.c_str());
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
@@ -238,26 +383,9 @@ void client(const char* ip_address, const char* port_string, int port_num) {
 
 	// first, load up address structs with getaddrinfo():
 
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
+	//login/logout code
 	
-	const char* test_ip = "128.205.36.8";
-	getaddrinfo(test_ip, "2345", &hints, &res);
 
-	// make a socket:
-
-	sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-
-	// connect!
-
-	connect(sockfd, res->ai_addr, res->ai_addrlen);
-	
-	char buf[100];
-	recv(sockfd, buf, 99, 0);
-	std::cout << "Message from server: " << buf << std::endl;
-	
-	close(sockfd);
 	
 	string command_str;
 	while (command_str != "EXIT") {
@@ -289,51 +417,74 @@ void client(const char* ip_address, const char* port_string, int port_num) {
 		}
 		
 		//client
-		else if (command_vector[0] == "LOGIN" && client) {
+		else if (command_vector[0] == "LOGIN") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
-			//login
+			memset(&hints, 0, sizeof hints);
+			hints.ai_family = AF_UNSPEC;
+			hints.ai_socktype = SOCK_STREAM;
+
+			const char* test_ip = "128.205.36.8";
+			getaddrinfo(test_ip, "2345", &hints, &res);
+
+			// make a socket:
+
+			sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+
+			// connect!
+
+			connect(sockfd, res->ai_addr, res->ai_addrlen);
+
+			char buf[100];
+			recv(sockfd, buf, 99, 0);
+			std::cout << "Message from server: " << buf << std::endl;
+
+			string temp_ip = ip_address;
+			string temp_port = port_string;
+			string temp_string = "Hi server, this is client " + temp_ip + ": " + temp_port + " speaking here!";
+			const char* message_to_server = temp_string.c_str();
+			send(sockfd, message_to_server, strlen(message_to_server), 0);
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
 		//client
-		else if (command_str == "REFRESH" && client) {
+		else if (command_str == "REFRESH") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 			//refresh
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
 		//client
-		else if (command_str == "SEND" && client) {
+		else if (command_str == "SEND") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 			//send
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
 		//client
-		else if (command_str == "BROADCAST" && client) {
+		else if (command_str == "BROADCAST") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 			//broadcast
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
 		//client
-		else if (command_str == "BLOCK" && client) {
+		else if (command_str == "BLOCK") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 			//block
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
 		//client
-		else if (command_str == "UNBLOCK" && client) {
+		else if (command_str == "UNBLOCK") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 			//unblock
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
 		//client
-		else if (command_str == "LOGOUT" && client) {
+		else if (command_str == "LOGOUT") {
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
-			//logout
+			close(sockfd);
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		//client (and server?)

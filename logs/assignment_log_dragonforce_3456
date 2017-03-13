@@ -1,6 +1,6 @@
-[AUTHOR:SUCCESS]
-I, apwilkin, have read and understood the course academic integrity policy.
-[AUTHOR:END]
-[IP:SUCCESS]
-IP:127.0.0.1
-[IP:END]
+[LOGIN:SUCCESS]
+[LOGIN:END]
+[LOGOUT:SUCCESS]
+[LOGOUT:END]
+[EXIT:SUCCESS]
+[EXIT:END]
