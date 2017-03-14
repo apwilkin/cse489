@@ -40,14 +40,22 @@
 
 using namespace std;
 
+struct client_struct;
 void server(const char* ip_address, const char* port_string, int port_num);
-void serverCommandProcessor(const char* ip_address, int port_num, int listener);
+void serverCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct> c_list);
 void client(const char* ip_address, const char* port_string, int port_num);
 void clientCommandProcessor(const char* ip_address, int port_num, int listener);
 void author(string command);
 void ip(string command, string ip_ad);
 void port(string command, int port);
-void list(string command);
+void list(string command, std::vector<client_struct> c_list);
+
+struct client_struct {
+	int list_id;
+	string hostname;
+	string ip_addr;
+	int port_number;
+} ;
 
 
 /**
@@ -175,8 +183,10 @@ void server(const char* ip_address, const char* port_string, int port_num) {
     int newfd;        // newly accept()ed socket descriptor
     struct sockaddr_storage remoteaddr; // client address
     socklen_t addrlen;
+    std::vector<client_struct> client_list;
 
-    char buf[256];    // buffer for client data
+	int buf_length = 256;
+    char buf[buf_length];    // buffer for client data
     int nbytes;
 
     char remoteIP[INET_ADDRSTRLEN];
@@ -231,6 +241,7 @@ void server(const char* ip_address, const char* port_string, int port_num) {
 
     // add the listener to the master set
     FD_SET(listener, &master);
+    FD_SET(0, &master);
 
     // keep track of the biggest file descriptor
     fdmax = listener; // so far, it's this one
@@ -243,9 +254,14 @@ void server(const char* ip_address, const char* port_string, int port_num) {
             exit(4);
         }
 
-        // run through the existing connections looking for data to read
+        // run through the existing connections looking for data to read        
         for(i = 0; i <= fdmax; i++) {
-            if (FD_ISSET(i, &read_fds)) { // we got one!!
+        	if (i == 0) {
+        		if (FD_ISSET(0, &read_fds)) {
+        			serverCommandProcessor(ip_address, port_num, listener, client_list);
+        		}
+        	}
+            else if (FD_ISSET(i, &read_fds)) { // we got one!!
                 if (i == listener) {
                     // handle new connections
                     addrlen = sizeof remoteaddr;
@@ -264,19 +280,48 @@ void server(const char* ip_address, const char* port_string, int port_num) {
                         if (newfd > fdmax) {    // keep track of the max
                             fdmax = newfd;
                         }
-                        printf("selectserver: new connection from %s on "
-                            "socket %d\n",
-                            inet_ntop(remoteaddr.ss_family,
-                                get_in_addr((struct sockaddr*)&remoteaddr),
-                                remoteIP, INET_ADDRSTRLEN),
-                            newfd);
+                        std::cout << buf << std::endl;
+                        int client_fd = newfd;
+                        string client_hostname = "hostname";
+                        int client_port = 3456;
+                        string client_ip = inet_ntop(remoteaddr.ss_family, get_in_addr((struct sockaddr*)&remoteaddr), remoteIP, INET_ADDRSTRLEN);
+                        
+                        client_struct new_client;
+                        
+                        new_client.list_id = client_fd;
+						new_client.hostname = client_hostname;
+						new_client.ip_addr = client_ip;
+						new_client.port_number = client_port;
+                        	
+						client_list.push_back(new_client);
+						for (int j = 0; j < client_list.size(); j++) {
+							//ex. send(newfd, msg, strlen(msg), 0)
+							const char* liststart = "LISTSTART";
+							//message
+							const char* listend = "LISTEND";
+							bytes_sent = send(new_client.list_id, liststart, strlen(liststart), 0);
+							//message
+							bytes_sent = send(new_client.list_id, listend, strlen(listend), 0);
+							//send LISTSTART
+							//send LISTID list_id
+							//send HOSTNAME hostname
+							//send IPADDR ip_addr
+							//send PORTNUMBER port_number
+							//send LISTEND
+						}
+                        //send list somehow. maybe for each client_struct iterate through items. Start with LISTSTART, end with LISTEND
+                        //send all buffered messages, as well as [EVENT]: Message Received                        
+                        //("msg from:%s\n[msg]:%s\n", client-ip, msg)
+                        printf("selectserver: new connection from %s on socket %d\n", remoteIP, newfd);
                     }
                 } else {
                     // handle data from a client
-                    if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0) {
+                    memset(buf, 0, buf_length);
+                    if ((nbytes = recv(i, buf, buf_length, 0)) <= 0) {
                         // got error or connection closed by client
                         if (nbytes == 0) {
                             // connection closed
+                            //remove this item from list
                             printf("selectserver: socket %d hung up\n", i);
                         } else {
                             perror("recv");
@@ -285,6 +330,9 @@ void server(const char* ip_address, const char* port_string, int port_num) {
                         FD_CLR(i, &master); // remove from master set
                     } else {
                         // we got some data from a client
+                        
+                        
+                        /* This is a way to send to all
                         for(j = 0; j <= fdmax; j++) {
                             // send to everyone!
                             if (FD_ISSET(j, &master)) {
@@ -295,7 +343,8 @@ void server(const char* ip_address, const char* port_string, int port_num) {
                                     }
                                 }
                             }
-                        }
+                        }*/
+                        
                     }
                 } // END handle data from client
             } // END got new incoming connection
@@ -304,10 +353,10 @@ void server(const char* ip_address, const char* port_string, int port_num) {
 }
 
 	//command processing
-void serverCommandProcessor(const char* ip_address, int port_num, int listener) {
+void serverCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct> c_list) {
 	string command_str;
+	getline(cin, command_str);
 	if (command_str != "") {
-		getline(cin, command_str);
 		istringstream iss(command_str);
 		vector<string> command_vector;
 		copy(istream_iterator<string>(iss), istream_iterator<string>(),	back_inserter(command_vector));
@@ -329,7 +378,7 @@ void serverCommandProcessor(const char* ip_address, int port_num, int listener) 
 
 		// server or client
 		else if (command_str == "LIST") {
-			list(command_str);
+			list(command_str, c_list);
 		}
 
 		// server
@@ -358,7 +407,7 @@ void serverCommandProcessor(const char* ip_address, int port_num, int listener) 
 			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 			//close(listener);
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
-			return; //may need to do something different here
+			exit(0); //may need to do something different here
 		}
 
 		else {
@@ -380,6 +429,7 @@ void client(const char* ip_address, const char* port_string, int port_num) {
 	
 	struct addrinfo hints, *res;
 	int sockfd;
+	std::vector<client_struct> c_list;
 
 	// first, load up address structs with getaddrinfo():
 
@@ -413,36 +463,62 @@ void client(const char* ip_address, const char* port_string, int port_num) {
 		
 		// server or client
 		else if (command_str == "LIST") {
-			list(command_str);
+			list(command_str, c_list);
 		}
 		
 		//client
 		else if (command_vector[0] == "LOGIN") {
-			cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
-			memset(&hints, 0, sizeof hints);
-			hints.ai_family = AF_UNSPEC;
-			hints.ai_socktype = SOCK_STREAM;
+			if (command_vector.size() != 3) {
+				cse4589_print_and_log("[%s:ERROR]\n", command_str.c_str());
+			}
+			else {
+				int server_port_num = atoi(command_vector[2].c_str()); //2345
+				const char* server_port = command_vector[2].c_str();
+				const char* server_ip = command_vector[1].c_str(); //"128.205.36.8"
+				struct sockaddr_in test_addrin;
+				if (server_port_num > 65535 || server_port_num < 1024) {
+					cse4589_print_and_log("[%s:ERROR]\n", command_str.c_str());
+				}
+				else if (inet_pton(AF_INET, server_ip, &(test_addrin.sin_addr)) == -1) {
+					cse4589_print_and_log("[%s:ERROR]\n", command_str.c_str());
+				}
+				else {
+					cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
+					memset(&hints, 0, sizeof hints);
+					hints.ai_family = AF_UNSPEC;
+					hints.ai_socktype = SOCK_STREAM;
 
-			const char* test_ip = "128.205.36.8";
-			getaddrinfo(test_ip, "2345", &hints, &res);
+					getaddrinfo(server_ip, server_port, &hints, &res);
 
-			// make a socket:
+					// make a socket:
 
-			sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+					sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 
-			// connect!
+					// connect!
 
-			connect(sockfd, res->ai_addr, res->ai_addrlen);
+					connect(sockfd, res->ai_addr, res->ai_addrlen);
+					
+					int buf_length = 256;
 
-			char buf[100];
-			recv(sockfd, buf, 99, 0);
-			std::cout << "Message from server: " << buf << std::endl;
+					char buf[buf_length];
+					recv(sockfd, buf, buf_length - 1, 0);
+					std::cout << "Message from server: " << buf << std::endl;
 
-			string temp_ip = ip_address;
-			string temp_port = port_string;
-			string temp_string = "Hi server, this is client " + temp_ip + ": " + temp_port + " speaking here!";
-			const char* message_to_server = temp_string.c_str();
-			send(sockfd, message_to_server, strlen(message_to_server), 0);
+					string temp_ip = ip_address;
+					string temp_port = port_string;
+					string temp_string = "Hi server, this is client " + temp_ip + ": " + temp_port + " speaking here!";
+					const char* message_to_server = temp_string.c_str();
+					int bytes_sent = send(sockfd, message_to_server, strlen(message_to_server), 0);
+					
+					memset(buf, 0, buf_length);					
+					recv(sockfd, buf, buf_length - 1, 0);
+					std::cout << "Start list? " << buf << std::endl;
+					
+					memset(buf, 0, buf_length);					
+					recv(sockfd, buf, buf_length - 1, 0);
+					std::cout << "End list? " << buf << std::endl;
+				}
+			}
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 		}
 		
@@ -503,6 +579,8 @@ void client(const char* ip_address, const char* port_string, int port_num) {
 
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+
 void author(string command_str) {
 	cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 	string your_ubit_name = "apwilkin";
@@ -523,10 +601,12 @@ void port(string command_str, int port) {
 	cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 }
 
-void list(string command_str) {
+void list(string command_str, std::vector<client_struct> c_list) {
 	cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
 	//print list
-	//cse4589_print_and_log("%-5d%-35s%-20s%-8d\n", list_id, hostname, ip_addr, port_num)
+	for (int j = 0; j < c_list.size(); j++) {
+		cse4589_print_and_log("%-5d%-35s%-20s%-8d\n", c_list[j].list_id, c_list[j].hostname.c_str(), c_list[j].ip_addr.c_str(), c_list[j].port_number);
+	}
 	cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 }
 
