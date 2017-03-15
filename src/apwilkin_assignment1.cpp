@@ -44,17 +44,23 @@ struct client_struct;
 void server(const char* ip_address, const char* port_string, int port_num);
 void serverCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct> c_list);
 void client(const char* ip_address, const char* port_string, int port_num);
-void clientCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct> c_list, string port_string, int* fdmax, fd_set* master);
+void clientCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct>* c_list, string port_string, int* fdmax, fd_set* master);
 void author(string command);
 void ip(string command, string ip_ad);
 void port(string command, int port);
 void list(string command, std::vector<client_struct> c_list);
 
 struct client_struct {
+	//sort thing, later do std::sort
 	int list_id;
 	string hostname;
 	string ip_addr;
 	int port_number;
+
+	bool operator < (const client_struct& cs) const {
+        return port_number < cs.port_number;
+    }
+
 } ;
 
 bool logged_in = false;
@@ -279,27 +285,46 @@ void server(const char* ip_address, const char* port_string, int port_num) {
                         	
 						client_list.push_back(new_client);
 						
+						const char* liststart = "LISTSTART";
+						memset(buf, 0, sizeof(buf) - 1);
+						strcpy(buf, liststart);
+						bytes_sent = send(newfd, buf, sizeof(buf), 0);
+						usleep(500);
+						
 						for (int j = 0; j < client_list.size(); j++) {
+							std::cout << "Sending Client" << std::endl;
+							client_struct current_client = client_list.at(j);
 							
-							const char* liststart = "LISTSTART";
 							memset(buf, 0, sizeof(buf) - 1);
-							strcpy(buf, liststart);
+							sprintf(buf, "%d", current_client.list_id);
 							bytes_sent = send(newfd, buf, sizeof(buf), 0);
+							std::cout << "First Part: " << buf << std::endl;
 							usleep(500);
 							
-							
-							const char* listend = "LISTEND";
 							memset(buf, 0, sizeof(buf) - 1);
-							strcpy(buf, listend);
+							strcpy(buf, current_client.hostname.c_str());
 							bytes_sent = send(newfd, buf, sizeof(buf), 0);
+							std::cout << "Second Part: " << buf << std::endl;
 							usleep(500);
-							//send LISTSTART
-							//send LISTID list_id
-							//send HOSTNAME hostname
-							//send IPADDR ip_addr
-							//send PORTNUMBER port_number
-							//send LISTEND
+							
+							memset(buf, 0, sizeof(buf) - 1);
+							strcpy(buf, current_client.ip_addr.c_str());
+							bytes_sent = send(newfd, buf, sizeof(buf), 0);
+							std::cout << "Third Part: " << buf << std::endl;
+							usleep(500);
+							
+							memset(buf, 0, sizeof(buf) - 1);
+							sprintf(buf, "%d", current_client.port_number);
+							bytes_sent = send(newfd, buf, sizeof(buf), 0);
+							std::cout << "Fourth Part: " << buf << std::endl;
+							usleep(500);
+							
 						}
+						const char* listend = "LISTEND";
+						memset(buf, 0, sizeof(buf) - 1);
+						strcpy(buf, listend);
+						bytes_sent = send(newfd, buf, sizeof(buf), 0);
+						usleep(500);
                         //send list somehow. maybe for each client_struct iterate through items. Start with LISTSTART, end with LISTEND
                         //send all buffered messages, as well as [EVENT]: Message Received                        
                         //("msg from:%s\n[msg]:%s\n", client-ip, msg)
@@ -510,7 +535,7 @@ void client(const char* ip_address, const char* port_string, int port_num) {
         for(i = 0; i <= fdmax; i++) {
         	if (i == 0) {
         		if (FD_ISSET(0, &read_fds)) {
-        			clientCommandProcessor(ip_address, port_num, listener, client_list, port_string, &fdmax, &master);
+        			clientCommandProcessor(ip_address, port_num, listener, &client_list, port_string, &fdmax, &master);
         		}
         	}
             else if (FD_ISSET(i, &read_fds) && logged_in) {
@@ -523,7 +548,7 @@ void client(const char* ip_address, const char* port_string, int port_num) {
 
 }
 	
-void clientCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct> c_list, string port_string, int* fdmax, fd_set* master) {
+void clientCommandProcessor(const char* ip_address, int port_num, int listener, std::vector<client_struct>* c_list, string port_string, int* fdmax, fd_set* master) {
 	string command_str;
 	getline(cin, command_str);
 	if (command_str != "") {
@@ -548,7 +573,7 @@ void clientCommandProcessor(const char* ip_address, int port_num, int listener, 
 		
 		// server or client
 		else if (command_str == "LIST") {
-			list(command_str, c_list);
+			list(command_str, *c_list);
 		}
 		
 		//client
@@ -608,30 +633,47 @@ void clientCommandProcessor(const char* ip_address, int port_num, int listener, 
 					//recv list
 					//recv buffer (haha yeah right!)
 
-					/*char buf[buf_length];
-					recv(client_sockfd, buf, sizeof(buf), MSG_WAITALL);
-					std::cout << "first receive" << std::endl;
-					std::cout << "Message from server: " << buf << std::endl;
-					std::cout << "after buf print" << std::endl;
-
-					string temp_ip = ip_address;
-					string temp_port = port_string;
-					string temp_string = "Hi server, this is client " + temp_ip + ": " + temp_port + " speaking here!";
-					const char* message_to_server = temp_string.c_str();
-					int bytes_sent = send(client_sockfd, message_to_server, strlen(message_to_server), 0);*/
 					
 					char buf[buf_length];
 					memset(buf, 0, sizeof(buf) - 1);					
 					int num_bytes = recv(client_sockfd, buf, sizeof(buf), 0);
+					string start_end = buf;
 					//if list start set done to false
 					//if list end set done to true
 					//loop  through add to client list pointer
-					std::cout << "List start: " << buf << std::endl;
-					
-					memset(buf, 0, sizeof(buf) - 1);					
-					recv(client_sockfd, buf, sizeof(buf), 0);
-					std::cout << "List end: " << buf << std::endl;
-
+					if (start_end == "LISTSTART") {
+						std::cout << "Reached start of list: " << buf << std::endl;
+						memset(buf, 0, sizeof(buf) - 1);					
+						recv(client_sockfd, buf, sizeof(buf), 0);
+						start_end = buf;
+						int j = 0;
+						client_struct next_client;
+						while (start_end != "LISTEND") {
+							std::cout << "Next received buf: " << buf << std::endl;
+							if (j == 0) {
+								next_client.list_id = atoi(buf);
+							}
+							else if (j == 1) {
+								next_client.hostname = buf;
+							}
+							else if (j == 2) {
+								next_client.ip_addr = buf;
+							}
+							else if (j == 3) {
+								next_client.port_number = atoi(buf);
+								c_list->push_back(next_client);
+								client_struct empty_struct;
+								next_client = empty_struct;
+							}
+							
+							if (j == 3) {j = 0;}
+							else { j++;}
+							memset(buf, 0, sizeof(buf) - 1);
+							recv(client_sockfd, buf, sizeof(buf), 0);
+							start_end = buf;
+							std::cout << start_end << std::endl;
+						}
+					}
 				}
 			}
 			cse4589_print_and_log("[%s:END]\n", command_str.c_str());
@@ -721,9 +763,10 @@ void port(string command_str, int port) {
 
 void list(string command_str, std::vector<client_struct> c_list) {
 	cse4589_print_and_log("[%s:SUCCESS]\n", command_str.c_str());
+	std::sort(c_list.begin(), c_list.end());
 	//print list
 	for (int j = 0; j < c_list.size(); j++) {
-		cse4589_print_and_log("%-5d%-35s%-20s%-8d\n", c_list[j].list_id, c_list[j].hostname.c_str(), c_list[j].ip_addr.c_str(), c_list[j].port_number);
+		cse4589_print_and_log("%-5d%-35s%-20s%-8d\n", j + 1, c_list[j].hostname.c_str(), c_list[j].ip_addr.c_str(), c_list[j].port_number);
 	}
 	cse4589_print_and_log("[%s:END]\n", command_str.c_str());
 }
